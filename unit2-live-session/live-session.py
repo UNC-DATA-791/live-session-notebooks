@@ -29,6 +29,7 @@ def _():
     import altair as alt
     import numpy as np
     import polars as pl
+    import pandas as pd
     import statsmodels.formula.api as smf
 
 
