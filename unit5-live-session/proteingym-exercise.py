@@ -254,7 +254,7 @@ def _(mo):
 
     Build this code with molab's free built-in agent instead of from scratch. Use the following prompt:
 
-    > Look at the amino acid and sequence embedding cells in `unit6-live-session/live-session.py` on GitHub ([link](https://github.com/UNC-DATA-791/live-session-notebooks/blob/main/unit6-live-session/live-session.py)) and adapt them to embed the mutant sequence I just built, then compare it to the wild-type embedding.
+    > Look at the amino acid and sequence embedding cells in `unit5-live-session/live-session.py` on GitHub ([link](https://github.com/UNC-DATA-791/live-session-notebooks/blob/main/unit5-live-session/live-session.py)) and adapt them to embed the mutant sequence I just built, then compare it to the wild-type embedding.
     """)
     return
 
