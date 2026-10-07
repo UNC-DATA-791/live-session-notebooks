@@ -14,7 +14,7 @@
 
 import marimo
 
-__generated_with = "0.25.0"
+__generated_with = "0.25.1"
 app = marimo.App(width="medium")
 
 
@@ -37,7 +37,7 @@ def _():
     import torch
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
+    from sklearn.model_selection import GroupShuffleSplit, train_test_split
     from sklearn.multiclass import OneVsRestClassifier
     from transformers import AutoTokenizer, EsmModel
 
@@ -47,13 +47,13 @@ def _():
         GroupShuffleSplit,
         LogisticRegression,
         OneVsRestClassifier,
-        ShuffleSplit,
         alt,
         io,
         np,
         pl,
         roc_auc_score,
         torch,
+        train_test_split,
         urllib,
     )
 
@@ -66,7 +66,7 @@ def _(torch):
     device = "cuda" if gpu else "cpu"
     model_name = "facebook/esm2_t33_650M_UR50D" if gpu else "facebook/esm2_t6_8M_UR50D"
     max_len = 1000 if gpu else 300
-    n_terms = 50 if gpu else 12
+    n_terms = 8
     gpu, model_name, max_len, n_terms
     return device, max_len, model_name, n_terms
 
@@ -106,7 +106,7 @@ def _(mo):
     mo.md(r"""
     ## The annotation gap
 
-    UniProt holds more than **250 million** protein sequences. Fewer than **1%** have a function checked by experiment. The rest need a prediction.
+    UniProt holds more than **250 million** protein sequences. Fewer than **1%** have a known function that has been validated in the lab..
 
     Function is written in the **Gene Ontology (GO)**. GO has three parts:
 
@@ -132,11 +132,11 @@ def _(mo):
     | Answers | "Does this sequence look natural?" | "Does this protein have function X?" |
     | Good for | Variant effects (Unit 6) | Functional annotation (today) |
 
-    A zero-shot score can tell you a mutation breaks a protein. It can't tell you the protein is a kinase. For that we need labeled examples.
+    A zero-shot score can predict if a mutation breaks a protein. It can't tell you the protein is a kinase. For that we need a *supervised* model.
 
-    The recipe today:
+    The workflow for today:
 
-    1. Turn each sequence into one vector with ESM2 (same trick as Unit 6).
+    1. Turn each sequence into one embeddings vector with ESM2 (same trick as Unit 6).
     2. Train one classifier per GO term on those vectors.
     3. Score it on proteins it hasn't seen, and be careful what "hasn't seen" means.
     """)
@@ -164,7 +164,7 @@ def _(mo):
     mo.md(r"""
     ## Get labeled proteins
 
-    CAFA data sits behind a Kaggle login, so we pull a stand-in from UniProt: reviewed human proteins, 50–300 residues on a laptop (up to 1000 on a GPU), with their MF GO terms and protein family.
+    CAFA data sits behind a Kaggle login, so we pull a stand-in from UniProt: reviewed human proteins, 50–300 residues on a laptop (up to 1000 on a GPU), with MF GO terms and protein family.
     """)
     return
 
@@ -225,14 +225,14 @@ def _(pl, proteins):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    "Protein binding" is on almost everything, so it tells us little. We drop it and keep the next 12 most common terms (50 on a GPU). Real CAFA models predict thousands.
+    We keep the 8 most common terms. Real CAFA models predict thousands.
     """)
     return
 
 
 @app.cell
 def _(n_terms, pl, proteins, term_counts):
-    top_terms = [t for t in term_counts["go_term"].to_list() if t != "GO:0005515"][:n_terms]
+    top_terms = term_counts["go_term"].head(n_terms).to_list()
 
     # like CAFA, only score proteins that have at least one true label
     sample = proteins.filter(pl.col("go_terms").list.set_intersection(top_terms).list.len() > 0)
@@ -258,6 +258,29 @@ def _(AutoTokenizer, EsmModel, device, model_name):
     return model, tokenizer
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Batches and padding
+
+    The model reads 32 proteins at a time. Every row in the batch, all the tokenized sequences, needs to be the same length. The tokenizer fills short proteins with blank tokens up to the longest one. That fill is the **padding**.
+
+    ```
+    MKTAYIAKQR....    <- real protein, then padding
+    MSEQ..........
+    MKVLAAGIVGLLLAGC  <- longest one sets the width
+    ```
+
+    Two things to watch:
+
+    - **Correctness**: the tokenizer also adds a start token (`<cls>`) and an end token (`<eos>`) to each protein. We build a mask that is 1 for a real residue and 0 for everything else, then average only the real residues. So padding and these extra tokens don't change a protein's vector.
+    - **Speed**: the model still does work on every blank. So we sort proteins by length first. Then each batch holds proteins of about the same length, and there is little to fill. At the end we put the rows back in their original order.
+
+    On this data, sorting cuts padding from about a third of the work to about 2% (from about half to 1% on a GPU, with longer proteins).
+    """)
+    return
+
+
 @app.cell
 def _(device, mo, model, np, sample, tokenizer, torch):
     _seqs = sample["sequence"].to_list()
@@ -268,11 +291,14 @@ def _(device, mo, model, np, sample, tokenizer, torch):
     with torch.no_grad():
         for _i in mo.status.progress_bar(range(0, len(_seqs), 32), title="Embedding"):
             _batch = [_seqs[j] for j in _order[_i:_i + 32]]
-            _inputs = tokenizer(_batch, return_tensors="pt", padding=True).to(device)
+            _inputs = tokenizer(
+                _batch, return_tensors="pt", padding=True, return_special_tokens_mask=True
+            ).to(device)
+            _special = _inputs.pop("special_tokens_mask")  # the model doesn't accept this input
             _hidden = model(**_inputs).last_hidden_state
-            # mean over real residues only, not the padding
-            _mask = _inputs["attention_mask"].unsqueeze(-1)
-            _batches.append(((_hidden * _mask).sum(1) / _mask.sum(1)).cpu().numpy())
+            # mean over real residues only: skip padding and the <cls>/<eos> tokens
+            _mask = (_special == 0).unsqueeze(-1)
+            _batches.append(((_hidden * _mask).sum(1) / _mask.sum(1)).cpu().numpy()) # sequence level emb.
 
     X = np.empty((len(_seqs), model.config.hidden_size), dtype=np.float32)
     X[_order] = np.concatenate(_batches)
@@ -319,14 +345,16 @@ def _(mo):
     mo.md(r"""
     ## How you split matters
 
-    Proteins come in families. Two members of one family often share both sequence *and* function.
+    Proteins belong to functional families. Two members of one family or similar in sequence *and* function.
 
     - **Random split**: family members land on both sides. The model can "remember" a close cousin from training.
     - **Family split**: whole superfamilies are held out. The test set looks more like a brand-new protein.
 
     We group by superfamily, not family. Rab and Ras are two "families", but both are small GTPases. If we split them apart, close cousins still leak across.
 
-    Watch the GTPase terms below. All small GTPases are one superfamily, so the family split puts every one of them in the test set. The model never sees a GTPase in training, and its AUC for "GTPase activity" can fall far below 0.5.
+    A superfamily and a GO term are two different ways to group proteins. A superfamily groups by shared ancestry, and each protein has one. A GO term groups by job, and one term can span many superfamilies. The table below shows how spread out each of our terms is.
+
+    Watch the GTPase terms. 90% of the GTPase proteins are small GTPases, which are all one superfamily. So the family split puts nearly all of them in the test set. The model learns from only a few distant GTPases, and its AUC for "GTPase activity" can fall far below 0.5.
 
     The family split is the honest one. It is closer to what CAFA does: predict for proteins nobody has labeled yet.
     """)
@@ -334,21 +362,52 @@ def _(mo):
 
 
 @app.cell
-def _(GroupShuffleSplit, ShuffleSplit, X, Y, fit_and_score, sample):
+def _(pl, sample, term_counts, top_terms):
+    # how spread out is each GO term across superfamilies?
+    _long = (
+        sample.explode("go_terms")
+        .filter(pl.col("go_terms").is_in(top_terms))
+        .rename({"go_terms": "go_term"})
+    )
+
+    (
+        _long.group_by("go_term", "superfamily")
+        .len()
+        .group_by("go_term")
+        .agg(
+            pl.col("len").sum().alias("proteins"),
+            pl.len().alias("superfamilies"),
+            pl.col("superfamily").sort_by("len", descending=True).first().alias("biggest_superfamily"),
+            (pl.col("len").max() / pl.col("len").sum()).round(2).alias("share_in_biggest"),
+        )
+        .join(term_counts.select("go_term", "go_name"), on="go_term")
+        .select("go_name", "proteins", "superfamilies", "biggest_superfamily", "share_in_biggest")
+        .sort("superfamilies")
+    )
+    return
+
+
+@app.cell
+def _(GroupShuffleSplit, X, fit_and_score, np, sample, train_test_split):
+    _rows = np.arange(len(X))
+    _groups = sample["superfamily"].to_numpy()
+
+    # (train_idx, test_idx) for each split
     splits = {
-        "random": ShuffleSplit(1, test_size=0.2, random_state=0),
-        "family": GroupShuffleSplit(1, test_size=0.2, random_state=0),
+        # random: members of one superfamily can land on both sides
+        "random": train_test_split(_rows, test_size=0.2, random_state=0),
+        # family: each superfamily lands on one side only
+        "family": next(GroupShuffleSplit(1, test_size=0.2, random_state=0).split(X, groups=_groups)),
     }
 
     results = {}
-    for _name, _splitter in splits.items():
-        _train, _test = next(_splitter.split(X, Y, groups=sample["superfamily"].to_numpy()))
+    for _name, (_train, _test) in splits.items():
         results[_name] = fit_and_score(_train, _test)
     return (results,)
 
 
 @app.cell
-def _(alt, pl, results, term_counts, top_terms):
+def _(pl, results, term_counts, top_terms):
     auc_df = (
         pl.DataFrame([
             {"split": name, "go_term": term, "auc": auc}
@@ -358,14 +417,19 @@ def _(alt, pl, results, term_counts, top_terms):
         .drop_nulls()
         .join(term_counts.select("go_term", "go_name"), on="go_term")
     )
+    auc_df
+    return (auc_df,)
 
+
+@app.cell
+def _(alt, auc_df, pl, top_terms):
     axis_kws = dict(titleFontSize=16, labelFontSize=13, titleFontWeight="bold")
 
-    (
+    _points = (
         alt.Chart(auc_df)
         .mark_point(size=150, filled=True)
         .encode(
-            x=alt.X("auc:Q", title="ROC AUC", scale=alt.Scale(domain=[0.5, 1])).axis(**axis_kws),
+            x=alt.X("auc:Q", title="ROC AUC", scale=alt.Scale(domain=[0, 1])).axis(**axis_kws),
             y=alt.Y("go_name:N", title=None, sort="-x").axis(labelFontSize=13),
             color=alt.Color(
                 "split:N",
@@ -374,9 +438,15 @@ def _(alt, pl, results, term_counts, top_terms):
             ),
             tooltip=["go_name", "split", alt.Tooltip("auc:Q", format=".3f")],
         )
-        .properties(width=500, height=max(360, 18 * len(top_terms)), title="Per-term AUC: random vs. family split")
     )
-    return (auc_df,)
+
+    # AUC 0.5 = coin flip
+    _coin_flip = alt.Chart(pl.DataFrame({"auc": [0.5]})).mark_rule(strokeDash=[6, 4], color="gray").encode(x="auc:Q")
+
+    (_coin_flip + _points).properties(
+        width=500, height=max(360, 18 * len(top_terms)), title="Per-term AUC: random vs. family split"
+    )
+    return
 
 
 @app.cell
@@ -426,7 +496,7 @@ def _(mo):
     mo.md(r"""
     ## From here to a CAFA 6 submission
 
-    - **More terms**: thousands of GO terms across MF, BP and CC, not 12.
+    - **More terms**: thousands of GO terms across MF, BP and CC, not 8.
     - **Propagate up the hierarchy**: if you predict "ATP binding", you also predict "nucleotide binding". A parent's score should be at least as high as its child's.
     - **Bigger embeddings**: ProtT5 or the larger ESM2 models.
     - **Submit**: one row per (protein, GO term, score) for the CAFA test proteins.
