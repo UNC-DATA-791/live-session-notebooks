@@ -226,6 +226,12 @@ def _(pl, proteins):
 def _(mo):
     mo.md(r"""
     We keep the 8 most common terms. Real CAFA models predict thousands.
+
+    `sample` holds the proteins we model. Its rows line up with `X` and `Y`, which we make below:
+
+    - row 1084 of `sample` is a protein
+    - row 1084 of `X` is that protein's embedding
+    - row 1084 of `Y` is its 0/1 GO labels
     """)
     return
 
