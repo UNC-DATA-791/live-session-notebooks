@@ -48,23 +48,18 @@ def _(mo):
 
     ### What have we learned so far?
     - Project 2: **encoder** protein language models (ESM2)
-        - Mask fill: guess a hidden amino acid from the residues around it
+        - Mask fill: guess a masked amino acid within a protein sequence
         - Embeddings for variant effects, function annotation, active learning, RAG
-    - An encoder **reads** a protein and hands back numbers
 
     ### Today: from reading to writing
     - A **decoder** model writes a protein one amino acid at a time
     - Encoder vs. decoder on the same protein: ESM2 vs. ProGen2
-    - The autoregressive loop, written out by hand
+    - The autoregressive loop
     - Sampling knobs: temperature and top-p
 
     ### What's next?
     - Project 3 - Notebook 1: gather and curate a training set for one protein family
-    - Unit 10: inverse folding and structure prediction. Sequence alone is not enough.
-
-    ### Open questions
-    - How do we judge a protein that nobody has ever seen?
-    - What training data does a model need to write sequences that are new *and* plausible?
+    - Unit 10: inverse folding and structure prediction
     """)
     return
 
@@ -77,11 +72,11 @@ def _(mo):
     | | Encoder (ESM2) | Decoder (ProGen2) |
     | --- | --- | --- |
     | Training task | Guess a **masked** amino acid | Guess the **next** amino acid |
-    | Context it sees | Both sides of the gap | Only what came before |
-    | Natural output | Embeddings, likelihood scores | A brand new sequence |
+    | Context it sees | Both sides of the mask | Only what sequence precedes the next token |
+    | Natural output | Embeddings, likelihood scores | A generated sequence |
     | We used it for | Variant effects, function, active learning | Writing proteins (Project 3) |
 
-    Both learn from the same natural protein sequences but differ int the training task. The task is what makes one a reader and the other a writer.
+    Both learn from the same natural protein sequences but differ in the training task.
     """)
     return
 
@@ -122,9 +117,14 @@ def _(AutoModelForCausalLM, AutoTokenizer, device, torch):
         else "hugohrban/progen2-small"  # 151M params, CPU-friendly
     )
 
-    # float32 on purpose. In bfloat16 the same probability can come out up to 0.1
-    # different depending on how the sequence was batched, which would quietly
-    # corrupt every chart below.
+    # Use float32 here, not bfloat16.
+    #
+    # bfloat16 would halve the memory, but it rounds hard. To check, we scored
+    # ubiquitin two ways: all 76 positions in one pass, then one position at a
+    # time. Both ways must give the same answer. In float32 they agreed to
+    # 0.0000007. In bfloat16 they disagreed by as much as 0.1, which is huge for a
+    # probability. Every chart below plots these probabilities, so we spend the
+    # memory and keep the precision.
     progen_tokenizer = AutoTokenizer.from_pretrained(
         progen_name, trust_remote_code=True
     )
@@ -305,7 +305,6 @@ def _(mo):
     - Drag the slider to **position 10**. Now ProGen2 is just as sure as ESM2. What changed?
     - Try **position 1**. ESM2 still has all 75 other residues to work with.
       ProGen2 has nothing but the start token, so it falls back on "proteins begin with M".
-    - Nothing about ProGen2 is worse. It is answering a harder question at the start,
       and an easier one by the end.
     """)
     return
@@ -322,9 +321,7 @@ def _(mo):
       a single batch.
     - **ProGen2** needs exactly **one** forward pass over the whole protein.
 
-    That second one deserves a moment. Inside a decoder every position is blocked
-    from seeing anything to its right, so you can hand it the finished protein and
-    no position is able to cheat:
+    Inside a decoder every position is blocked from seeing anything to its right, so you can hand it the finished protein and get the next token logits for all positions simultaneously.
 
     | Output row | What that row had read | What it predicts |
     | --- | --- | --- |
@@ -333,9 +330,7 @@ def _(mo):
     | 2 | `1MQ` | position 3 |
     | 3 | `1MQI` | position 4 |
 
-    Row 2 was handed the whole sequence, but it only ever saw `1MQ`. So row *i* is
-    already the answer to "what comes after the first *i* residues", and all 76
-    answers fall out of one pass.
+    Row 2 was handed the whole sequence, but it only ever saw `1MQ`. So row *i* isalready the answer to "what comes after the first *i* residues", and all 76 answers fall out of one pass.
     """)
     return
 
@@ -487,8 +482,7 @@ def _(mo):
     mo.md(r"""
     ## The autoregressive loop
 
-    ProGen2 only ever answers one question: **what comes next?** To write a whole
-    protein we ask it over and over, feeding its own answer back in:
+    ProGen2 answers **what comes next?**. To generate a protein sequence we ask that question in a loop.
 
     1. Start with a prompt. `1` on its own means "begin a protein"
     2. Run the model and read the scores (logits) for every token
@@ -497,8 +491,7 @@ def _(mo):
     5. Stick it on the end
     6. Go back to step 2, until the model writes `2` or we run out of patience
 
-    "Autoregressive" is the name for step 5. Every new letter depends on all the
-    letters the model already wrote, including its own mistakes.
+    "Autoregressive" is the name for step 5. Every new letter depends on all the preceding letters.
     """)
     return
 
@@ -589,28 +582,24 @@ def _(device, mo, progen_model, progen_tokenizer, torch, wt_sequence):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### Hold on. It just copied ubiquitin.
+    ### Did it just copy ubiquitin?
 
-    It did. All 76 residues, exactly. Ubiquitin is one of the most conserved
-    proteins in biology, so the training data holds it over and over. Give the model
-    a real start and greedy decoding **recites** the rest from memory.
+    Yes it re-produced the first 76 residues, exactly. Give the model a the beginning of a real protein and select the most probable next token every time and you might just reproduce the input protein.
 
-    Then look at what comes *after* residue 76. It starts a second copy:
+    Look at what comes *after* residue 76. It's a second copy:
     `...VLRLRGG` **`MQIFVKTLTGK`**`...`
 
-    That is not a glitch. Real polyubiquitin genes such as human *UBB* and *UBC*
+    Real polyubiquitin genes such as human *UBB* and *UBC*
     encode several ubiquitins head-to-tail in one transcript, and the model learned
-    that too.
+    that.
 
     So the recitation is faithful right down to the gene architecture. Which is
     impressive, and completely useless for design:
 
-    - Low perplexity on a famous protein does **not** mean the model can design one.
-    - The real question is never "can it reproduce something we already have?"
-      but "can it write something new that still works?"
+    - High confidence in the next token on a well represented protein does **not** necessarily mean the model can generate a good novel protein sequence.
+    - The real challenge is not "can it reproduce something we have already seen?" but "can it write something new that still works?"
 
-    To get something new we have to sample instead of recite. Which means we need to
-    talk about *how* we sample.
+    To get something new we have to sample instead of recite. Which means we need to talk about *how* we sample.
     """)
     return
 
@@ -842,8 +831,7 @@ def _(mo):
     mo.md(r"""
     ## Open question: how do we judge what it wrote?
 
-    We now have a machine that writes protein sequences on demand. Nothing so far
-    tells us whether any of them are **good**.
+    We now have a machine that writes protein sequences. Nothing so far tells us whether any of them are **good**.
 
     The trap is that our two obvious instincts pull in opposite directions:
 
@@ -851,48 +839,6 @@ def _(mo):
     | --- | --- | --- |
     | **Plausible** — looks like a real protein | High likelihood under the model | The safest high-likelihood sequence is a copy of something already in the training set |
     | **New** — not just a copy | Low identity to anything natural | Random letters score perfectly on novelty and fold into nothing |
-
-    So neither number means much on its own. A useful generative model has to land
-    in the awkward middle: **sequence-distinct from anything observed, yet still
-    structurally sound.**
-
-    That is the claim the ProGen2 fine-tuning paper has to defend, and it is why
-    the authors reach for four checks rather than one:
-
-    1. **HMMER** — does the sequence still score as a member of the target family?
-    2. **Sequence identity** — how close is the nearest natural relative?
-    3. **ESMFold** — does it fold, and how confident is the structure prediction?
-    4. **Attention maps** — is the model looking at the parts we would expect?
-
-    Checks 3 and 4 are where Unit 10 picks up.
-
-    **Discussion:** if you could only keep one of those four checks, which would you
-    keep, and what would you be giving up?
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## This week
-
-    **Readings**
-
-    - Hugging Face: *Introduction to Fine-tuning* — the `Trainer` API, dynamic padding,
-      `TrainingArguments`, and writing a `compute_metrics` function
-    - *Protein Family Sequence Generation through ProGen2 Fine-Tuning* (IEEE) — adding
-      family tokens to the vocabulary and fine-tuning on seven Pfam families
-
-    **Do**
-
-    - Unit 9 Knowledge Check
-    - **Project 3 – Notebook 1**: gather and curate a training set for one protein family
-
-    Notebook 1 is where today's open question turns practical. Before you can
-    fine-tune, you have to decide what counts as a member of your family, how many
-    sequences you need, how similar they are allowed to be to each other, and what
-    you will hold out to test with.
     """)
     return
 

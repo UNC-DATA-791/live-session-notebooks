@@ -189,16 +189,21 @@ def _(mo):
     The expression `set(s) <= STANDARD` is true if all the letters in `s` are
     standard.
 
-    <details>
-    <summary><b>Hint</b></summary>
+    /// details | Hint
 
-    - `set(s) <= STANDARD` is `True` if all the letters in `s` are standard.
-    - Use `pl.col("Sequence").map_elements(..., return_dtype=pl.Boolean)` inside
-      `.filter()`.
-    - `.unique(subset="Sequence")` removes the repeated sequences.
-    - `.sort("Entry")` makes the result repeatable.
+    ```python
+    globins = (
+        raw.filter(
+            pl.col("Sequence").map_elements(
+                lambda s: set(s) <= STANDARD, return_dtype=pl.Boolean
+            )
+        )
+        .unique(subset="Sequence")
+        .sort("Entry")
+    )
+    ```
 
-    </details>
+    ///
     """)
     return
 
@@ -361,8 +366,7 @@ def _(mo):
     **Your task.** Write the function. It receives one sequence. It returns one
     float value.
 
-    <details>
-    <summary><b>Hint</b></summary>
+    /// details | Hint
 
     ```python
     ids = esm_tokenizer(sequence, return_tensors="pt")["input_ids"].to(device)
@@ -373,7 +377,7 @@ def _(mo):
     return log_probs[positions, targets].mean().item()
     ```
 
-    </details>
+    ///
     """)
     return
 
@@ -454,14 +458,13 @@ def _(mo):
     **Your task.** Add a column with the name `guess`. Each value is `"natural"`
     or `"generated"`.
 
-    <details>
-    <summary><b>Hint</b></summary>
+    /// details | Hint
 
     - Read the threshold from the plot in Step 6. Put it between the two groups.
     - Use `pl.when(...).then(pl.lit("generated")).otherwise(pl.lit("natural"))`.
     - A value near `-0.30` is a good first try.
 
-    </details>
+    ///
     """)
     return
 
