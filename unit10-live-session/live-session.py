@@ -10,7 +10,6 @@
 #     "torch==2.11.0",
 #     "tmtools==0.3.0",
 #     "transformers==5.14.1",
-# ]
 # ///
 
 import marimo
@@ -336,7 +335,7 @@ def _(ubiquitin, ubq_pdb):
         ca_coords(ubq_pdb), ca_coords(ubq_ref_pdb), ubiquitin, ubiquitin
     )
     ubq_tm.tm_norm_chain2, ubq_tm.rmsd
-    return move_pdb, ubq_ref_pdb, ubq_tm
+    return ca_coords, move_pdb, np, tm_align, ubq_ref_pdb, ubq_tm, urllib
 
 
 @app.cell(hide_code=True)
@@ -372,6 +371,114 @@ def _(mo):
     """)
     return
 
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## A complex with ColabFold
+
+    ColabFold (AlphaFold2-multimer) folded Pfs48/45 domain 3 together with the 32F3 antibody. Templates were off, so it could not copy the lab structure (`7ZWI`).
+    """)
+    return
+
+
+@app.cell
+def _(ca_coords, np, pl, tm_align, urllib):
+    complex_pred_pdb = (
+        urllib.request.urlopen(
+            "https://raw.githubusercontent.com/UNC-DATA-791/live-session-notebooks/main/unit10-live-session/pfs48_d3_32f3_colabfold_model_3.pdb",
+            timeout=60,
+        )
+        .read()
+        .decode()
+    )
+    complex_ref_pdb = (
+        urllib.request.urlopen(
+            "https://www.ebi.ac.uk/pdbe/entry-files/download/pdb7zwi.ent",
+            timeout=60,
+        )
+        .read()
+        .decode()
+    )
+
+    # (name, chain, number of residues to compare; None = all)
+    _parts = [
+        ("Pfs48/45 D3", "A", None),
+        ("32F3 heavy chain, variable part", "B", 120),
+        ("32F3 light chain, variable part", "C", 108),
+    ]
+    _rows = []
+    for _name, _chain, _n in _parts:
+        _p = ca_coords(complex_pred_pdb, _chain)[:_n]
+        _r = ca_coords(complex_ref_pdb, _chain)[:_n]
+        _fit = tm_align(_p, _r, "A" * len(_p), "A" * len(_r))
+        _rows.append(
+            {
+                "part": _name,
+                "TM-score": round(_fit.tm_norm_chain2, 2),
+                "RMSD (Å)": round(_fit.rmsd, 1),
+            }
+        )
+
+    # line up the antigen, then see how far away the antibody sits
+    antigen_fit = tm_align(
+        ca_coords(complex_pred_pdb, "A"),
+        ca_coords(complex_ref_pdb, "A"),
+        "A" * len(ca_coords(complex_pred_pdb, "A")),
+        "A" * len(ca_coords(complex_ref_pdb, "A")),
+    )
+    for _name, _chain, _n in _parts[1:]:
+        _p = (
+            ca_coords(complex_pred_pdb, _chain)[:_n] @ antigen_fit.u.T
+            + antigen_fit.t
+        )
+        _r = ca_coords(complex_ref_pdb, _chain)[:_n]
+        _rmsd = float(np.sqrt(((_p - _r) ** 2).sum(axis=1).mean()))
+        _rows.append(
+            {
+                "part": _name + ", position vs. antigen",
+                "TM-score": None,
+                "RMSD (Å)": round(_rmsd, 1),
+            }
+        )
+
+    complex_scores = pl.DataFrame(_rows)
+    complex_scores
+    return antigen_fit, complex_pred_pdb, complex_ref_pdb
+
+
+@app.cell
+def _(antigen_fit, complex_pred_pdb, complex_ref_pdb, mo, move_pdb, py3Dmol):
+    _view = py3Dmol.view(width=600, height=450)
+    _view.addModel(complex_ref_pdb, "pdb")
+    _view.setStyle(
+        {"model": 0}, {}
+    )  # hide everything first, then show chains A-C
+    _view.setStyle(
+        {"model": 0, "chain": "A"}, {"cartoon": {"color": "#6b7280"}}
+    )
+    _view.setStyle(
+        {"model": 0, "chain": ["B", "C"]}, {"cartoon": {"color": "#c9ced6"}}
+    )
+    _view.addModel(
+        move_pdb(complex_pred_pdb, antigen_fit.u, antigen_fit.t), "pdb"
+    )
+    _view.setStyle(
+        {"model": 1, "chain": "A"}, {"cartoon": {"color": "#2f6fdb"}}
+    )
+    _view.setStyle(
+        {"model": 1, "chain": ["B", "C"]}, {"cartoon": {"color": "#d9552b"}}
+    )
+    _view.zoomTo()
+    mo.vstack(
+        [
+            mo.md(
+                "Lab structure: dark gray (antigen), light gray (antibody). Prediction: blue (antigen), orange (antibody). Lined up on the antigen."
+            ),
+            mo.iframe(_view._make_html(), height=470),
+        ]
+    )
+    return
 
 if __name__ == "__main__":
     app.run()
