@@ -4,6 +4,11 @@ Inverse folding. Keep the shape, change the letters. A timeline of protein
 generative models, how ProteinMPNN reads a backbone as a neighbor graph, and
 a run of ProteinMPNN on an antibody chain, checked with ESMFold.
 
+The exercise compares ProteinMPNN sequences with sequences from EvoDiff-Seq,
+using ProtT5 embeddings, a UMAP and the Fréchet ProtT5 distance (FPD), as in
+Figure 3A of the EvoDiff paper.
+
 | Notebook | Open in molab |
 | --- | --- |
 | Live session | [![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/UNC-DATA-791/live-session-notebooks/blob/main/unit11-live-session/live-session.py) |
+| Exercise: ProteinMPNN versus EvoDiff | [![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/UNC-DATA-791/live-session-notebooks/blob/main/unit11-live-session/evodiff-vs-mpnn-exercise.py) |
