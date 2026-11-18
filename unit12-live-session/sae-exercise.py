@@ -81,7 +81,13 @@ def layer_picker(mo):
 
 @app.cell
 def load_data(mo, pl):
-    residues = pl.read_csv(mo.notebook_dir() / "residues.csv")
+    # Read the file next to the notebook if it is there. On molab it is not, so use GitHub.
+    _local = mo.notebook_dir() / "residues.csv"
+    residues = pl.read_csv(
+        str(_local)
+        if _local.exists()
+        else "https://raw.githubusercontent.com/UNC-DATA-791/live-session-notebooks/main/unit12-live-session/residues.csv"
+    )
 
     # Rebuild each protein's sequence from the residue table
     protein_sequences = (
