@@ -435,7 +435,7 @@ def match_results(X, f1_per_feature, labels, mo, np, on, pl, scored_on):
 
     sae_best = best_match(on)
 
-    # The same test on the raw 320 numbers. "On" means the number is above a cut-off. We try 4 cut-offs and keep the best.
+    # The same test on the raw 320 embedding values. "On" means the value is above a cut-off. We try 4 cut-offs and keep the best.
     _raw = [best_match((X > _t).astype(np.float32)) for _t in (0, 0.5, 1, 2)]
     raw_best = {_n: max(_r[_n][0] for _r in _raw) for _n in labels}
 
@@ -454,14 +454,14 @@ def match_chart(alt, label_names, labels, np, pl, raw_best, sae_best):
     _rows = []
     for _n in label_names:
         _rows += [
-            {"label": _n, "source": "Single raw number", "F1": raw_best[_n]},
+            {"label": _n, "source": "Single embedding value", "F1": raw_best[_n]},
             {"label": _n, "source": "SAE feature", "F1": sae_best[_n][0]},
         ]
     _aa = [_n for _n in labels if _n.startswith("aa_")]
     _rows += [
         {
             "label": "amino acid (mean of 20)",
-            "source": "Single raw number",
+            "source": "Single embedding value",
             "F1": float(np.mean([raw_best[_n] for _n in _aa])),
         },
         {
@@ -486,7 +486,7 @@ def match_chart(alt, label_names, labels, np, pl, raw_best, sae_best):
             "source:N",
             title=None,
             scale=alt.Scale(
-                domain=["Single raw number", "SAE feature"],
+                domain=["Single embedding value", "SAE feature"],
                 range=["#9aa3ad", "#2f6fdb"],
             ),
         ),
@@ -504,7 +504,7 @@ def questions(mo):
     mo.md(r"""
     ## 4. What do you see?
 
-    - Which labels does the SAE match much better than any single raw number? Which labels does it **not** match better? Look at helix, strand and transmembrane. What could explain this?
+    - Which labels does the SAE match much better than any single embedding value? Which labels does it **not** match better? Look at helix, strand and transmembrane. What could explain this?
     - Look at the amino acids. The best feature for one amino acid has an F1 near 1. What does this tell you about what ESM2-8M knows at layer 4?
     - Pick a label with a modest F1, such as signal peptide. Is the best feature a clean detector, or does it fire on other residues too? How would you check?
     - Use the dropdown to try layer 2 and layer 6, and press the train button each time. Which labels get better or worse? Why might a later layer hold more about structure?
