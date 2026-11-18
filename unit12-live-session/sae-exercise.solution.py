@@ -230,19 +230,34 @@ def train_task_md(mo):
 
     The SAE learns by trying to rebuild its input. The loss is the **mean squared error** between the rebuilt hidden state and the original. The sparsity comes from the top-k step, so we do not need a penalty.
 
-    Finish the training step in `train_sae`. For each batch:
+    Write `train_sae(X, k, n_features=2560, epochs=40, batch_size=512, lr=1e-3, seed=0)`. It returns the trained SAE and a list with the mean loss of each epoch. It should:
 
-    1. Run the SAE to get the features and the rebuilt input.
-    2. Compute the loss.
-    3. Clear the old gradients, run `backward()`, and take an optimizer step.
+    1. Set the random seed, turn `X` into a torch tensor, build a `SparseAutoencoder`, and make an Adam optimizer (the part that updates the weights).
+    2. Repeat for each epoch (one epoch is one pass over all residues): shuffle the residues and go through them in batches.
+    3. For each batch: run the SAE to get the features and the rebuilt input, compute the loss, clear the old gradients, call `backward()`, and take an optimizer step.
+    4. Keep the average loss of each epoch.
 
     /// details | Hint
     ```python
-    features, rebuilt = sae(batch)
-    loss = ((rebuilt - batch) ** 2).mean()
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+    def train_sae(X, k, n_features=2560, epochs=40, batch_size=512, lr=1e-3, seed=0):
+        torch.manual_seed(seed)  # the same random start every time
+        data = torch.tensor(X)  # numpy array to torch tensor
+        sae = SparseAutoencoder(data.shape[1], n_features, k)
+        optimizer = torch.optim.Adam(sae.parameters(), lr=lr)  # updates the weights
+        epoch_losses = []
+        for _ in range(epochs):  # one epoch = one pass over all residues
+            order = torch.randperm(len(data))  # shuffle the residues
+            total = 0.0
+            for i in range(0, len(data), batch_size):  # go through them in batches
+                batch = data[order[i : i + batch_size]]
+                features, rebuilt = sae(batch)  # 1. run the SAE
+                loss = ((rebuilt - batch) ** 2).mean()  # 2. how far is the rebuilt input from the original?
+                optimizer.zero_grad()  # 3. clear the old gradients
+                loss.backward()  # work out how to change each weight
+                optimizer.step()  # change the weights a little
+                total += loss.item() * len(batch)
+            epoch_losses.append(total / len(data))  # the mean loss of this epoch
+        return sae, epoch_losses
     ```
     ///
     """)
@@ -373,8 +388,9 @@ def match_task_md(mo):
     `y.astype(np.float32) @ on` gives TP for every feature at once. The number of times a feature is on is `on.sum(axis=0)`. The number of true residues is `y.sum()`. Note that `2*TP + FP + FN` equals `on.sum(axis=0) + y.sum()`.
 
     ```python
-    tp = y.astype(np.float32) @ on
-    return 2 * tp / np.maximum(on.sum(axis=0) + y.sum(), 1)
+    def f1_per_feature(on, y):
+        tp = y.astype(np.float32) @ on
+        return 2 * tp / np.maximum(on.sum(axis=0) + y.sum(), 1)
     ```
     ///
     """)
@@ -493,6 +509,21 @@ def match_chart(alt, label_names, labels, np, pl, raw_best, sae_best):
         height=380,
         title="Does one number or one feature match a label?",
     )
+    return
+
+
+@app.cell(hide_code=True)
+def questions(mo):
+    mo.md(r"""
+    ## 4. What do you see?
+
+    - Which labels does the SAE match much better than any single raw number? Which labels does it **not** match better? Look at helix, strand and transmembrane. What could explain this?
+    - Look at the amino acids. The best feature for one amino acid has an F1 near 1. What does this tell you about what ESM2-8M knows at layer 4?
+    - Pick a label with a modest F1, such as signal peptide. Is the best feature a clean detector, or does it fire on other residues too? How would you check?
+    - Use the dropdown to try layer 2 and layer 6, and press the train button each time. Which labels get better or worse? Why might a later layer hold more about structure?
+    - A feature that matches a label is a **candidate**, not proof. What would you do to test whether a feature really stands for "signal peptide"?
+    - Compare with the Evo 2 features in the live session. What would you need to label DNA features the way we labeled protein residues?
+    """)
     return
 
 
